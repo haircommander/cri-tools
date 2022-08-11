@@ -519,6 +519,29 @@ var _ = framework.KubeDescribe("Security Context", func() {
 			Expect(string(stdout)).NotTo(MatchRegexp(`CapBnd:\s0000000000000000`))
 		})
 
+		It("runtime should support adding ALL capabilities non root", func() {
+			By("create pod")
+			podID, podConfig = framework.CreatePodSandboxForContainer(rc)
+
+			By("create container with security context Capability and test")
+			containerID := createCapabilityContainerWithUser(rc, ic, podID, podConfig, "container-with-added-all-capability-test-", []string{"ALL"}, nil, 1000)
+
+			startContainer(rc, containerID)
+			Eventually(func() runtimeapi.ContainerState {
+				return getContainerStatus(rc, containerID).State
+			}, time.Minute, time.Second*4).Should(Equal(runtimeapi.ContainerState_CONTAINER_RUNNING))
+
+			stdout, stderr, err := rc.ExecSync(
+				containerID, []string{"cat", "/proc/self/status"},
+				time.Duration(defaultExecSyncTimeout)*time.Second,
+			)
+			Expect(err).To(BeNil())
+			Expect(string(stderr)).To(BeEmpty())
+			Expect(string(stdout)).NotTo(MatchRegexp(`CapBnd:\s0000000000000000`))
+			Expect(string(stdout)).NotTo(MatchRegexp(`CapEff:\s0000000000000000`))
+			Expect(string(stdout)).NotTo(MatchRegexp(`CapPrm:\s0000000000000000`))
+		})
+
 		It("runtime should support dropping ALL capabilities", func() {
 			By("create pod")
 			podID, podConfig = framework.CreatePodSandboxForContainer(rc)
@@ -1046,8 +1069,12 @@ func checkNetworkManagement(rc internalapi.RuntimeService, containerID string, m
 	}
 }
 
-// createCapabilityContainer creates container with specified Capability in ContainerConfig.
 func createCapabilityContainer(rc internalapi.RuntimeService, ic internalapi.ImageManagerService, podID string, podConfig *runtimeapi.PodSandboxConfig, prefix string, add []string, drop []string) string {
+	return createCapabilityContainerWithUser(rc, ic, podID, podConfig, prefix, add, drop, 0)
+}
+
+// createCapabilityContainer creates container with specified Capability in ContainerConfig and a given User.
+func createCapabilityContainerWithUser(rc internalapi.RuntimeService, ic internalapi.ImageManagerService, podID string, podConfig *runtimeapi.PodSandboxConfig, prefix string, add []string, drop []string, user int64) string {
 	By("create Capability container")
 	containerName := prefix + framework.NewUUID()
 	containerConfig := &runtimeapi.ContainerConfig{
@@ -1059,6 +1086,9 @@ func createCapabilityContainer(rc internalapi.RuntimeService, ic internalapi.Ima
 				Capabilities: &runtimeapi.Capability{
 					AddCapabilities:  add,
 					DropCapabilities: drop,
+				},
+				RunAsUser: &runtimeapi.Int64Value{
+					Value: user,
 				},
 			},
 		},
