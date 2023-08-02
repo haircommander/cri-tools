@@ -18,7 +18,6 @@ package main
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
@@ -87,47 +86,17 @@ func podMetrics(
 	client cri.RuntimeService,
 	opts podMetricsOptions,
 ) error {
-	if !opts.watch {
-		if err := displayPodMetrics(c, client, opts); err != nil {
-			return fmt.Errorf("display pod metrics: %w", err)
-		}
-
-		return nil
-	}
-
-	displayErrCh := make(chan error, 1)
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	watchCtx, cancelFn := context.WithCancel(context.Background())
-	defer cancelFn()
-
-	// Put the displayPodMetrics in another goroutine, because it might be
-	// time consuming with lots of pods and we want to cancel it
-	// ASAP when user hit CtrlC
-	go func() {
-		for range ticker.C {
-			if err := displayPodMetrics(watchCtx, client, opts); err != nil {
-				displayErrCh <- err
-				break
-			}
-		}
-	}()
-
-	// listen for CtrlC or error
-	select {
-	case <-SetupInterruptSignalHandler():
-		cancelFn()
-		return nil
-	case err := <-displayErrCh:
-		return err
-	}
+	d := podMetricsDisplayer{opts}
+	return handleDisplay(c, client, opts.watch, d.displayPodMetrics)
 }
 
-func displayPodMetrics(
+type podMetricsDisplayer struct {
+	opts podMetricsOptions
+}
+
+func (p *podMetricsDisplayer) displayPodMetrics(
 	c context.Context,
 	client cri.RuntimeService,
-	opts podMetricsOptions,
 ) error {
 	metrics, err := podSandboxMetrics(client)
 	if err != nil {
@@ -135,7 +104,7 @@ func displayPodMetrics(
 	}
 
 	response := &pb.ListPodSandboxMetricsResponse{PodMetrics: metrics}
-	switch opts.output {
+	switch p.opts.output {
 	case "json", "":
 		return outputProtobufObjAsJSON(response)
 	case "yaml":
