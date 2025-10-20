@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,6 +30,55 @@ import (
 	"sigs.k8s.io/cri-tools/pkg/common"
 	"sigs.k8s.io/cri-tools/pkg/framework"
 )
+
+// expectedMetricDescriptorNames contains all expected metric descriptor names
+// based on metrics returned by kubelet with CRI-O and cadvisor on the legacy cadvisor stats provider
+// on kubernetes 1.35.
+var expectedMetricDescriptorNames = []string{
+	"container_cpu_load_average_10s",
+	"container_cpu_load_d_average_10s",
+	"container_cpu_system_seconds_total",
+	"container_cpu_usage_seconds_total",
+	"container_cpu_user_seconds_total",
+	"container_file_descriptors",
+	"container_fs_inodes_free",
+	"container_fs_inodes_total",
+	"container_fs_io_current",
+	"container_fs_io_time_seconds_total",
+	"container_fs_io_time_weighted_seconds_total",
+	"container_fs_limit_bytes",
+	"container_fs_read_seconds_total",
+	"container_fs_reads_merged_total",
+	"container_fs_reads_total",
+	"container_fs_sector_reads_total",
+	"container_fs_sector_writes_total",
+	"container_fs_usage_bytes",
+	"container_fs_write_seconds_total",
+	"container_fs_writes_merged_total",
+	"container_fs_writes_total",
+	"container_last_seen",
+	"container_memory_cache",
+	"container_memory_failcnt",
+	"container_memory_failures_total",
+	"container_memory_kernel_usage",
+	"container_memory_mapped_file",
+	"container_memory_max_usage_bytes",
+	"container_memory_rss",
+	"container_memory_swap",
+	"container_memory_total_active_file_bytes",
+	"container_memory_total_inactive_file_bytes",
+	"container_memory_usage_bytes",
+	"container_memory_working_set_bytes",
+	"container_network_receive_bytes_total",
+	"container_network_receive_errors_total",
+	"container_network_receive_packets_dropped_total",
+	"container_network_receive_packets_total",
+	"container_network_transmit_bytes_total",
+	"container_network_transmit_errors_total",
+	"container_network_transmit_packets_dropped_total",
+	"container_network_transmit_packets_total",
+	"container_oom_events_total",
+}
 
 var _ = framework.KubeDescribe("PodSandbox", func() {
 	f := framework.NewDefaultCRIFramework()
@@ -78,6 +128,45 @@ var _ = framework.KubeDescribe("PodSandbox", func() {
 			By("test remove PodSandbox")
 			testRemovePodSandbox(rc, podID)
 			podID = "" // no need to cleanup pod
+		})
+	})
+	Context("runtime should support metrics operations", func() {
+		var podID string
+		var podConfig *runtimeapi.PodSandboxConfig
+
+		AfterEach(func() {
+			if podID != "" {
+				By("stop PodSandbox")
+				Expect(rc.StopPodSandbox(context.TODO(), podID)).NotTo(HaveOccurred())
+				By("delete PodSandbox")
+				Expect(rc.RemovePodSandbox(context.TODO(), podID)).NotTo(HaveOccurred())
+			}
+		})
+
+		It("runtime should support returning metrics descriptors [Conformance]", func() {
+			By("list metric descriptors")
+			descs := listMetricDescriptors(rc)
+
+			By("verify expected metric descriptors are present")
+			testMetricDescriptors(descs)
+		})
+
+		It("runtime should support listing pod sandbox metrics [Conformance]", func() {
+			By("create pod sandbox")
+			podID, podConfig = framework.CreatePodSandboxForContainer(rc)
+
+			By("create container in pod")
+			ic := f.CRIClient.CRIImageClient
+			containerID := framework.CreatePauseContainer(rc, ic, podID, podConfig, "container-for-metrics-")
+
+			By("start container")
+			startContainer(rc, containerID)
+
+			By("list pod sandbox metrics")
+			metrics := listPodSandboxMetrics(rc)
+
+			By("verify pod metrics are present")
+			testPodSandboxMetrics(metrics, podID)
 		})
 	})
 })
@@ -166,6 +255,17 @@ func listPodSandbox(c internalapi.RuntimeService, filter *runtimeapi.PodSandboxF
 	return pods
 }
 
+// listMetricDescriptors lists MetricDescriptors.
+func listMetricDescriptors(c internalapi.RuntimeService) []*runtimeapi.MetricDescriptor {
+	By("List MetricDescriptors.")
+
+	descs, err := c.ListMetricDescriptors(context.TODO())
+	framework.ExpectNoError(err, "failed to list MetricDescriptors status: %v", err)
+	framework.Logf("List MetricDescriptors succeed")
+
+	return descs
+}
+
 // createLogTempDir creates the log temp directory for podSandbox.
 func createLogTempDir(podSandboxName string) (hostPath, podLogPath string) {
 	hostPath, err := os.MkdirTemp("", "podLogTest")
@@ -195,4 +295,77 @@ func createPodSandboxWithLogDirectory(c internalapi.RuntimeService) (sandboxID s
 	}
 
 	return framework.RunPodSandbox(c, podConfig), podConfig, hostPath
+}
+
+// testMetricDescriptors verifies that all expected metric descriptors are present.
+func testMetricDescriptors(descs []*runtimeapi.MetricDescriptor) {
+	returnedDescriptors := make(map[string]*runtimeapi.MetricDescriptor)
+	for _, desc := range descs {
+		returnedDescriptors[desc.GetName()] = desc
+		Expect(desc.GetHelp()).NotTo(BeEmpty(), "Metric descriptor %q should have help text", desc.GetName())
+		Expect(desc.GetLabelKeys()).NotTo(BeEmpty(), "Metric descriptor %q should have label keys", desc.GetName())
+	}
+
+	missingMetrics := []string{}
+
+	for _, expectedName := range expectedMetricDescriptorNames {
+		_, found := returnedDescriptors[expectedName]
+		if !found {
+			missingMetrics = append(missingMetrics, expectedName)
+		}
+	}
+
+	Expect(missingMetrics).To(BeEmpty(), "Expected %s metrics to be present and they were not", strings.Join(missingMetrics, " "))
+}
+
+// listPodSandboxMetrics lists PodSandboxMetrics.
+func listPodSandboxMetrics(c internalapi.RuntimeService) []*runtimeapi.PodSandboxMetrics {
+	By("List PodSandboxMetrics.")
+
+	metrics, err := c.ListPodSandboxMetrics(context.TODO())
+	framework.ExpectNoError(err, "failed to list PodSandboxMetrics: %v", err)
+	framework.Logf("List PodSandboxMetrics succeed")
+
+	return metrics
+}
+
+// testPodSandboxMetrics verifies that metrics are present for the specified pod.
+func testPodSandboxMetrics(allMetrics []*runtimeapi.PodSandboxMetrics, podID string) {
+	var podMetrics *runtimeapi.PodSandboxMetrics
+
+	for _, m := range allMetrics {
+		if m.GetPodSandboxId() == podID {
+			podMetrics = m
+
+			break
+		}
+	}
+
+	Expect(podMetrics).NotTo(BeNil(), "Metrics for pod %q should be present", podID)
+
+	metricNamesFound := make(map[string]bool)
+
+	for _, metric := range podMetrics.GetMetrics() {
+		if !metricNamesFound[metric.GetName()] {
+			metricNamesFound[metric.GetName()] = true
+		}
+	}
+
+	for _, containerMetric := range podMetrics.GetContainerMetrics() {
+		for _, metric := range containerMetric.GetMetrics() {
+			if !metricNamesFound[metric.GetName()] {
+				metricNamesFound[metric.GetName()] = true
+			}
+		}
+	}
+
+	missingMetrics := []string{}
+
+	for _, expectedName := range expectedMetricDescriptorNames {
+		if !metricNamesFound[expectedName] {
+			missingMetrics = append(missingMetrics, expectedName)
+		}
+	}
+
+	Expect(missingMetrics).To(BeEmpty(), "Expected %s metrics to be present and they were not", strings.Join(missingMetrics, " "))
 }
