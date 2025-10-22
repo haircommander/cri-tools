@@ -35,6 +35,7 @@ import (
 // based on metrics returned by kubelet with CRI-O and cadvisor on the legacy cadvisor stats provider
 // on kubernetes 1.35.
 var expectedMetricDescriptorNames = []string{
+	"container_blkio_device_usage_total",
 	"container_cpu_load_average_10s",
 	"container_cpu_load_d_average_10s",
 	"container_cpu_system_seconds_total",
@@ -47,12 +48,14 @@ var expectedMetricDescriptorNames = []string{
 	"container_fs_io_time_seconds_total",
 	"container_fs_io_time_weighted_seconds_total",
 	"container_fs_limit_bytes",
+	"container_fs_reads_bytes_total",
 	"container_fs_read_seconds_total",
 	"container_fs_reads_merged_total",
 	"container_fs_reads_total",
 	"container_fs_sector_reads_total",
 	"container_fs_sector_writes_total",
 	"container_fs_usage_bytes",
+	"container_fs_writes_bytes_total",
 	"container_fs_write_seconds_total",
 	"container_fs_writes_merged_total",
 	"container_fs_writes_total",
@@ -78,6 +81,24 @@ var expectedMetricDescriptorNames = []string{
 	"container_network_transmit_packets_dropped_total",
 	"container_network_transmit_packets_total",
 	"container_oom_events_total",
+	"container_pressure_cpu_stalled_seconds_total",
+	"container_pressure_cpu_waiting_seconds_total",
+	"container_pressure_io_stalled_seconds_total",
+	"container_pressure_io_waiting_seconds_total",
+	"container_pressure_memory_stalled_seconds_total",
+	"container_pressure_memory_waiting_seconds_total",
+	"container_processes",
+	"container_sockets",
+	"container_spec_cpu_period",
+	"container_spec_cpu_shares",
+	"container_spec_memory_limit_bytes",
+	"container_spec_memory_reservation_limit_bytes",
+	"container_spec_memory_swap_limit_bytes",
+	"container_start_time_seconds",
+	"container_tasks_state",
+	"container_threads",
+	"container_threads_max",
+	"container_ulimits_soft",
 }
 
 var _ = framework.KubeDescribe("PodSandbox", func() {
