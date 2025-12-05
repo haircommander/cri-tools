@@ -179,11 +179,14 @@ var _ = framework.KubeDescribe("PodSandbox", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 
+			By("list metric descriptors")
+			descs := listMetricDescriptors(rc)
+
 			By("list pod sandbox metrics")
 			metrics := listPodSandboxMetrics(rc)
 
 			By("verify pod metrics are present")
-			testPodSandboxMetrics(metrics, podID)
+			testPodSandboxMetrics(metrics, descs, podID)
 		})
 	})
 })
@@ -347,7 +350,7 @@ func listPodSandboxMetrics(c internalapi.RuntimeService) []*runtimeapi.PodSandbo
 }
 
 // testPodSandboxMetrics verifies that metrics are present for the specified pod.
-func testPodSandboxMetrics(allMetrics []*runtimeapi.PodSandboxMetrics, podID string) {
+func testPodSandboxMetrics(allMetrics []*runtimeapi.PodSandboxMetrics, descs []*runtimeapi.MetricDescriptor, podID string) {
 	var podMetrics *runtimeapi.PodSandboxMetrics
 
 	for _, m := range allMetrics {
@@ -360,18 +363,18 @@ func testPodSandboxMetrics(allMetrics []*runtimeapi.PodSandboxMetrics, podID str
 
 	Expect(podMetrics).NotTo(BeNil(), "Metrics for pod %q should be present", podID)
 
-	metricNamesFound := make(map[string]bool)
+	metricNamesFound := make(map[string][]string)
 
 	for _, metric := range podMetrics.GetMetrics() {
-		if !metricNamesFound[metric.GetName()] {
-			metricNamesFound[metric.GetName()] = true
+		if len(metricNamesFound[metric.GetName()]) == 0 {
+			metricNamesFound[metric.GetName()] = metric.GetLabelValues()
 		}
 	}
 
 	for _, containerMetric := range podMetrics.GetContainerMetrics() {
 		for _, metric := range containerMetric.GetMetrics() {
-			if !metricNamesFound[metric.GetName()] {
-				metricNamesFound[metric.GetName()] = true
+			if len(metricNamesFound[metric.GetName()]) == 0 {
+				metricNamesFound[metric.GetName()] = metric.GetLabelValues()
 			}
 		}
 	}
@@ -379,10 +382,20 @@ func testPodSandboxMetrics(allMetrics []*runtimeapi.PodSandboxMetrics, podID str
 	missingMetrics := []string{}
 
 	for _, expectedName := range expectedMetricDescriptorNames {
-		if !metricNamesFound[expectedName] {
+		if len(metricNamesFound[expectedName]) == 0 {
 			missingMetrics = append(missingMetrics, expectedName)
 		}
 	}
 
 	Expect(missingMetrics).To(BeEmpty(), "Expected %s metrics to be present and they were not", strings.Join(missingMetrics, " "))
+
+	mismatchedLabels := []string{}
+	for _, desc := range descs {
+		if len(metricNamesFound[desc.GetName()]) != len(desc.GetLabelKeys()) {
+			mismatchedLabels = append(mismatchedLabels, desc.GetName())
+		}
+	}
+
+	Expect(mismatchedLabels).To(BeEmpty(), "Expected %s metrics to have same set of labels in ListMetricDescriptors and ListPodSandboxMetrics", strings.Join(mismatchedLabels, ","))
+
 }
